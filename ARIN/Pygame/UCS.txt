@@ -1,0 +1,40 @@
+function UNIFORM-COST-SEARCH(problem)
+    returns a solution node or failure
+
+    node ← NODE(problem.INITIAL)
+
+    if GOAL-TEST(node.STATE) then
+        return SOLUTION(node)
+
+    frontier ← PRIORITY-QUEUE ordered by PATH-COST g(n)
+
+    frontier.INSERT(node, 0)
+
+    reached ← dictionary
+    reached[node.STATE] ← 0
+
+    while frontier is not empty do
+
+        node ← frontier.REMOVE-MIN()
+
+        if GOAL-TEST(node.STATE) then
+            return SOLUTION(node)
+
+        for each child in EXPAND(problem, node) do
+
+            s ← child.STATE
+
+            step_cost ← TILE_SWAPPED_WITH_ZERO(node.STATE, child.STATE)
+
+            new_cost ← node.PATH-COST + step_cost
+
+            if s not in reached
+               or new_cost < reached[s] then
+
+                child.PATH-COST ← new_cost
+
+                reached[s] ← new_cost
+
+                frontier.INSERT(child, new_cost)
+
+    return failure

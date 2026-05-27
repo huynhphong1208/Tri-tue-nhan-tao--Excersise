@@ -1,0 +1,48 @@
+function A-STAR-SEARCH(problem)
+    returns a solution node or failure
+
+    frontier ← a priority queue ordered by f(n)
+
+    reached ← an empty map
+
+    start ← NODE(problem.INITIAL)
+
+    start.g ← 0
+
+    start.h ← MANHATTAN(start.STATE)
+
+    start.f ← start.g + start.h
+
+    frontier.PUSH(start)
+
+    reached[start.STATE] ← start
+
+    while frontier is not empty do
+
+        node ← frontier.POP()
+
+        if problem.IS-GOAL(node.STATE) then
+            return node
+
+        for each child in EXPAND(problem, node) do
+
+            g_new ← node.g + 1
+
+            if child.STATE in reached then
+
+                if g_new ≥ reached[child.STATE].g then
+                    continue
+
+            child.parent ← node
+
+            child.g ← g_new
+
+            child.h ← MANHATTAN(child.STATE)
+
+            child.f ← child.g + child.h
+
+            reached[child.STATE] ← child
+
+            frontier.PUSH(child)
+
+    return failure

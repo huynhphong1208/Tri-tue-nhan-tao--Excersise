@@ -1,5 +1,5 @@
 """
-8-Puzzle — Pygame UI trực quan hóa BFS / DFS / IDS / UCS / Greedy.
+8-Puzzle — Pygame UI trực quan hóa BFS / DFS / IDS / UCS / Greedy / A* / IDA*.
 Run: python puzzle8_game.py
 """
 
@@ -276,7 +276,7 @@ def fit_window_size(content_top: int, info_h: int) -> tuple[int, int]:
 def format_search_log(step: SearchStep, algo: SearchAlgo) -> str:
     tag = algo.value
     d = step.depth
-    if algo in (SearchAlgo.UCS, SearchAlgo.GREEDY) and step.message:
+    if algo in (SearchAlgo.UCS, SearchAlgo.GREEDY, SearchAlgo.ASTAR, SearchAlgo.IDASTAR) and step.message:
         if step.kind in (
             StepKind.INIT,
             StepKind.REMOVE,
@@ -336,7 +336,7 @@ def draw_text_columns(
 class PuzzleApp:
     def __init__(self) -> None:
         pygame.init()
-        pygame.display.set_caption("8-Puzzle · BFS / DFS / IDS / UCS / Greedy")
+        pygame.display.set_caption("8-Puzzle · BFS / DFS / IDS / UCS / Greedy / A* / IDA*")
 
         self.font_title = pygame.font.SysFont("segoeui", 26, bold=True)
         self.font_heading = pygame.font.SysFont("segoeui", 16, bold=True)
@@ -442,6 +442,8 @@ class PuzzleApp:
             SearchAlgo.IDS: "Stack DLS",
             SearchAlgo.UCS: "PQ theo g(n)",
             SearchAlgo.GREEDY: "PQ theo h(n)",
+            SearchAlgo.ASTAR: "PQ theo f(n)=g(n)+h(n)",
+            SearchAlgo.IDASTAR: "Stack DFS + threshold f(n)",
         }[self.algo]
         lines = [
             f"Thuật toán: {self.algo.value}",
@@ -452,7 +454,7 @@ class PuzzleApp:
 
         searching = self.search_result and self.mode in (Mode.VISUALIZE, Mode.SOLUTION)
         if searching:
-            if self.algo is SearchAlgo.IDS:
+            if self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
                 lim = self._depth_limit_display()
                 lines.append(f"|stack|: {self._metric_pair(self._frontier_display_count(), self.max_frontier)}")
                 lines.append(f"Độ sâu/limit: {self._metric_pair(self._depth_display(), lim)}")
@@ -460,7 +462,7 @@ class PuzzleApp:
                 rnd = cur.ids_round if cur and cur.ids_round is not None else (
                     self.search_result.ids_rounds if self.search_result else 0
                 )
-                lines.append(f"Vòng IDS: {rnd}")
+                lines.append(f"{'Vòng IDS' if self.algo is SearchAlgo.IDS else 'Vòng IDA*'}: {rnd}")
             else:
                 lines.append(
                     f"|reached|: {self._metric_pair(self._reached_display_count(), self.max_reached)}"
@@ -496,23 +498,25 @@ class PuzzleApp:
         return True
 
     def _build_buttons(self) -> None:
-        """Lưới 4 hàng: thuật toán | UCS/Greedy | hành động | phát."""
+        """Lưới 4 hàng: thuật toán | heuristic | hành động | phát."""
         rw = self.W - RIGHT_X - MARGIN
         x = RIGHT_X
         y = HEADER_H + 8
         g = BTN_GAP
         h = BTN_ROW_H
 
-        third = (rw - 2 * g) // 3
-        self.btn_bfs = Button(pygame.Rect(x, y, third, h), "BFS", toggle=True)
-        self.btn_dfs = Button(pygame.Rect(x + third + g, y, third, h), "DFS", toggle=True)
-        self.btn_ids = Button(pygame.Rect(x + 2 * (third + g), y, third, h), "IDS", toggle=True)
+        fourth = (rw - 3 * g) // 4
+        self.btn_bfs = Button(pygame.Rect(x, y, fourth, h), "BFS", toggle=True)
+        self.btn_dfs = Button(pygame.Rect(x + fourth + g, y, fourth, h), "DFS", toggle=True)
+        self.btn_ids = Button(pygame.Rect(x + 2 * (fourth + g), y, fourth, h), "IDS", toggle=True)
+        self.btn_ucs = Button(pygame.Rect(x + 3 * (fourth + g), y, fourth, h), "UCS", toggle=True)
         self.btn_bfs.selected = True
         y += h + g
 
-        half = (rw - g) // 2
-        self.btn_ucs = Button(pygame.Rect(x, y, half, h), "UCS", toggle=True)
-        self.btn_greedy = Button(pygame.Rect(x + half + g, y, half, h), "Greedy", toggle=True)
+        third = (rw - 2 * g) // 3
+        self.btn_greedy = Button(pygame.Rect(x, y, third, h), "Greedy", toggle=True)
+        self.btn_astar = Button(pygame.Rect(x + third + g, y, third, h), "A*", toggle=True)
+        self.btn_idastar = Button(pygame.Rect(x + 2 * (third + g), y, third, h), "IDA*", toggle=True)
         y += h + g
 
         fourth = (rw - 3 * g) // 4
@@ -761,7 +765,7 @@ class PuzzleApp:
             self.screen, COLORS["section_border"], (MARGIN, HEADER_H), (self.W - MARGIN, HEADER_H), 1
         )
         self.screen.blit(
-            self.font_title.render("8-Puzzle · BFS / DFS / IDS / UCS / Greedy", True, COLORS["title"]),
+            self.font_title.render("8-Puzzle · BFS / DFS / IDS / UCS / Greedy / A* / IDA*", True, COLORS["title"]),
             (MARGIN, 14),
         )
         self.screen.blit(
@@ -908,6 +912,8 @@ class PuzzleApp:
             self.btn_ids,
             self.btn_ucs,
             self.btn_greedy,
+            self.btn_astar,
+            self.btn_idastar,
             self.btn_shuffle,
             self.btn_reset,
             self.btn_solve,
@@ -951,12 +957,14 @@ class PuzzleApp:
             SearchAlgo.IDS: "Depth & Stack (IDS)",
             SearchAlgo.UCS: "Reached & PQ (UCS)",
             SearchAlgo.GREEDY: "Reached & PQ (Greedy)",
+            SearchAlgo.ASTAR: "Reached & PQ (A*)",
+            SearchAlgo.IDASTAR: "Depth & Stack (IDA*)",
         }[self.algo]
         inner_y = draw_section_box(self.screen, bar_rect, bar_title, self.font_heading)
         bx = bar_rect.x + pad
         by = inner_y
 
-        if self.algo is SearchAlgo.IDS:
+        if self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
             by = draw_metric_bar(
                 self.screen,
                 bx,
@@ -996,6 +1004,7 @@ class PuzzleApp:
                 SearchAlgo.DFS: "Stack (LIFO)",
                 SearchAlgo.UCS: "PQ theo g(n)",
                 SearchAlgo.GREEDY: "PQ theo h(n)",
+                SearchAlgo.ASTAR: "PQ theo f(n)=g+h",
             }
             frontier_label = frontier_labels[self.algo]
             draw_metric_bar(
@@ -1034,6 +1043,14 @@ class PuzzleApp:
             SearchAlgo.GREEDY: (
                 "Greedy: PQ theo h(n)=Manhattan; reached khi INSERT; "
                 "không tái mở trạng thái đã reached."
+            ),
+            SearchAlgo.ASTAR: (
+                "A*: PQ theo f(n)=g(n)+h(n); g là số bước tích lũy, "
+                "h là Manhattan; cập nhật nếu tìm được g nhỏ hơn."
+            ),
+            SearchAlgo.IDASTAR: (
+                "IDA*: threshold khởi tạo = f(start); DFS theo contour f<=threshold; "
+                "nếu không thấy đích thì tăng threshold = min f vượt ngưỡng."
             ),
         }
         flow.wrap(self.screen, self.font_sm, algo_blurbs[self.algo])
@@ -1092,6 +1109,8 @@ class PuzzleApp:
         self.btn_ids.selected = algo is SearchAlgo.IDS
         self.btn_ucs.selected = algo is SearchAlgo.UCS
         self.btn_greedy.selected = algo is SearchAlgo.GREEDY
+        self.btn_astar.selected = algo is SearchAlgo.ASTAR
+        self.btn_idastar.selected = algo is SearchAlgo.IDASTAR
         self._reset_run()
         self.status_msg = f"Đã chọn {algo.value}."
 
@@ -1106,6 +1125,10 @@ class PuzzleApp:
             self._select_algo(SearchAlgo.UCS)
         elif self.btn_greedy.hit(pos):
             self._select_algo(SearchAlgo.GREEDY)
+        elif self.btn_astar.hit(pos):
+            self._select_algo(SearchAlgo.ASTAR)
+        elif self.btn_idastar.hit(pos):
+            self._select_algo(SearchAlgo.IDASTAR)
         elif self.btn_shuffle.hit(pos):
             self.shuffle()
         elif self.btn_edit.hit(pos):

@@ -1,0 +1,36 @@
+function ITERATIVE-DEEPENING-SEARCH(problem)
+    returns a solution node or failure
+
+    for depth = 0 to ∞ do
+
+        result ← DEPTH-LIMITED-SEARCH(problem, depth)
+
+        if result ≠ cutoff then
+            return result
+
+function DEPTH-LIMITED-SEARCH(problem, limit)
+    returns a solution node or failure or cutoff
+
+    frontier ← a LIFO queue (stack)
+    frontier.PUSH(NODE(problem.INITIAL))
+
+    result ← failure
+
+    while frontier is not empty do
+
+        node ← frontier.POP()
+
+        if problem.IS-GOAL(node.STATE) then
+            return node
+
+        if DEPTH(node) ≥ limit then
+
+            result ← cutoff
+
+        else if not IS-CYCLE(node) then
+
+            for each child in EXPAND(problem, node) do
+
+                frontier.PUSH(child)
+
+    return result

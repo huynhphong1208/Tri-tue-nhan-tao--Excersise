@@ -1,0 +1,32 @@
+function DFS(problem)
+
+    node ← NODE(problem.INITIAL)
+
+    if GOAL_TEST(node.STATE) then
+        return SOLUTION(node)
+
+    frontier ← STACK()
+    frontier.PUSH(node)
+
+    reached ← {problem.INITIAL}
+
+    while frontier is not empty do
+
+        node ← frontier.POP()
+
+        for each action in ACTIONS(node.STATE) do
+
+            child ← CHILD_NODE(problem, node, action)
+
+            s ← child.STATE
+
+            if GOAL_TEST(s) then
+                return SOLUTION(child)
+
+            if s ∉ reached then
+
+                reached ← reached ∪ {s}
+
+                frontier.PUSH(child)
+
+    return failure

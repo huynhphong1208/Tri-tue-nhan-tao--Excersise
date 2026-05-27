@@ -1,0 +1,34 @@
+function GREEDY-SEARCH(problem)
+    returns a solution node or failure
+
+    frontier ← a priority queue ordered by h(n)
+
+    reached ← an empty set
+
+    start ← NODE(problem.INITIAL)
+
+    start.h ← MANHATTAN(start.STATE)
+
+    frontier.PUSH(start)
+
+    while frontier is not empty do
+
+        node ← frontier.POP()
+
+        if problem.IS-GOAL(node.STATE) then
+            return node
+
+        add node.STATE to reached
+
+        for each child in EXPAND(problem, node) do
+
+            if child.STATE not in frontier
+               and child.STATE not in reached then
+
+                child.parent ← node
+
+                child.h ← MANHATTAN(child.STATE)
+
+                frontier.PUSH(child)
+
+    return failure

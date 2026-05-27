@@ -1,0 +1,77 @@
+function IDA-STAR-SEARCH(problem)
+    returns a solution node or failure
+
+    start ← NODE(problem.INITIAL)
+
+    start.g ← 0
+    start.h ← MANHATTAN(start.STATE)
+    start.f ← start.g + start.h
+
+    threshold ← start.f
+
+    while true do
+
+        frontier ← a LIFO queue (stack)
+        reached ← an empty set
+
+        frontier.PUSH(start)
+
+        result ← DEPTH-LIMITED-SEARCH(
+                    problem,
+                    frontier,
+                    reached,
+                    threshold
+                 )
+
+        if result = FOUND then
+            return solution
+
+        if result = failure then
+            return failure
+
+        threshold ← result
+
+
+function DEPTH-LIMITED-SEARCH(
+            problem,
+            frontier,
+            reached,
+            threshold
+         )
+
+    minimum ← ∞
+
+    while frontier is not empty do
+
+        node ← frontier.POP()
+
+        if problem.IS-GOAL(node.STATE) then
+            return FOUND
+
+        add node.STATE to reached
+
+        for each child in EXPAND(problem, node) do
+
+            if child.STATE not in reached then
+
+                child.g ← node.g + 1
+
+                child.h ← MANHATTAN(child.STATE)
+
+                child.f ← child.g + child.h
+
+                child.parent ← node
+
+                if child.f ≤ threshold then
+
+                    frontier.PUSH(child)
+
+                else
+
+                    minimum ←
+                        MIN(minimum, child.f)
+
+    if minimum = ∞ then
+        return failure
+
+    return minimum

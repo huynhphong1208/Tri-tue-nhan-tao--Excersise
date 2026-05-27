@@ -1,4 +1,4 @@
-"""8-Puzzle search — BFS, DFS, IDS, UCS, Greedy theo mã giả tương ứng."""
+"""8-Puzzle search — BFS, DFS, IDS, UCS, Greedy, A*, IDA* theo mã giả tương ứng."""
 
 from __future__ import annotations
 
@@ -18,6 +18,8 @@ class SearchAlgo(Enum):
     IDS = "IDS"
     UCS = "UCS"
     GREEDY = "Greedy"
+    ASTAR = "A*"
+    IDASTAR = "IDA*"
 
 
 class StepKind(Enum):
@@ -553,6 +555,275 @@ def _solve_greedy(start: tuple[int, ...], *, record_steps: bool) -> SearchResult
     return None
 
 
+def _solve_astar(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
+    """A_star.txt: frontier = priority queue theo f(n)=g(n)+h(n), h là Manhattan."""
+    if start == GOAL:
+        step = SearchStep(StepKind.GOAL, start, 1, 0, 0, "Trạng thái ban đầu đã là đích.")
+        return SearchResult(SearchAlgo.ASTAR, [start], [step] if record_steps else [], 0)
+
+    counter = 0
+    g0 = 0
+    h0 = manhattan(start)
+    heap: list[tuple[int, int, int, tuple[int, ...]]] = []
+    heapq.heappush(heap, (g0 + h0, g0, counter, start))
+    counter += 1
+
+    reached: dict[tuple[int, ...], int] = {start: g0}
+    expanded: set[tuple[int, ...]] = set()
+    parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+    depth: dict[tuple[int, ...], int] = {start: 0}
+    steps: list[SearchStep] = []
+    nodes_expanded = 0
+
+    def log(kind: StepKind, state: tuple[int, ...], msg: str) -> None:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    kind,
+                    state,
+                    len(reached),
+                    len(heap),
+                    depth.get(state, 0),
+                    msg,
+                )
+            )
+
+    log(StepKind.INIT, start, f"Khởi tạo PQ theo f=g+h; g=0, h={h0}, f={h0}.")
+
+    while heap:
+        f, g, _, node = heapq.heappop(heap)
+        if node in expanded:
+            continue
+        if g > reached.get(node, 10**9):
+            continue
+        expanded.add(node)
+
+        nodes_expanded += 1
+        log(StepKind.REMOVE, node, f"REMOVE-MIN f={f} (g={g}, h={f-g}), tầng {depth[node]}.")
+
+        if node == GOAL:
+            path = reconstruct(node, parent)
+            log(StepKind.GOAL, node, f"GOAL — f={f}, g={g}, sau {nodes_expanded} nút mở rộng.")
+            return SearchResult(SearchAlgo.ASTAR, path, steps, nodes_expanded)
+
+        for child in neighbors(node):
+            new_g = g + 1
+            if child not in reached or new_g < reached[child]:
+                reached[child] = new_g
+                parent[child] = node
+                depth[child] = depth[node] + 1
+                ch = manhattan(child)
+                heapq.heappush(heap, (new_g + ch, new_g, counter, child))
+                counter += 1
+                log(StepKind.ADD, child, f"INSERT f={new_g + ch} (g={new_g}, h={ch}).")
+
+        log(
+            StepKind.EXPLORE,
+            node,
+            f"Hoàn tất mở rộng — |reached|={len(reached)}, |PQ|={len(heap)}.",
+        )
+
+    log(StepKind.FAIL, start, "Priority queue rỗng — failure.")
+    return None
+
+
+def _ida_star_dfs(
+    node: tuple[int, ...],
+    g: int,
+    threshold: int,
+    path: list[tuple[int, ...]],
+    path_set: set[tuple[int, ...]],
+    parent: dict[tuple[int, ...], tuple[int, ...] | None],
+    steps: list[SearchStep],
+    *,
+    record_steps: bool,
+    stats: dict[str, int],
+    round_no: int,
+) -> tuple[int, tuple[int, ...] | None]:
+    h = manhattan(node)
+    f = g + h
+
+    if record_steps:
+        steps.append(
+            SearchStep(
+                StepKind.REMOVE,
+                node,
+                len(path_set),
+                len(path),
+                g,
+                f"POP node với f={f} (g={g}, h={h}), threshold={threshold}.",
+                depth_limit=threshold,
+                ids_round=round_no,
+            )
+        )
+
+    if f > threshold:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    StepKind.CUTOFF,
+                    node,
+                    len(path_set),
+                    len(path),
+                    g,
+                    f"f={f} > threshold={threshold}; cập nhật minimum.",
+                    depth_limit=threshold,
+                    ids_round=round_no,
+                )
+            )
+        return f, None
+
+    if node == GOAL:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    StepKind.GOAL,
+                    node,
+                    len(path_set),
+                    len(path),
+                    g,
+                    f"IS-GOAL tại g={g}, f={f}.",
+                    depth_limit=threshold,
+                    ids_round=round_no,
+                )
+            )
+        return -1, node
+
+    stats["expanded"] += 1
+    minimum = 10**9
+
+    for child in neighbors(node):
+        if child in path_set:
+            continue
+        parent[child] = node
+        path.append(child)
+        path_set.add(child)
+        if record_steps:
+            cg = g + 1
+            ch = manhattan(child)
+            steps.append(
+                SearchStep(
+                    StepKind.ADD,
+                    child,
+                    len(path_set),
+                    len(path),
+                    cg,
+                    f"PUSH child f={cg + ch} (g={cg}, h={ch}).",
+                    depth_limit=threshold,
+                    ids_round=round_no,
+                )
+            )
+        t, goal = _ida_star_dfs(
+            child,
+            g + 1,
+            threshold,
+            path,
+            path_set,
+            parent,
+            steps,
+            record_steps=record_steps,
+            stats=stats,
+            round_no=round_no,
+        )
+        if goal is not None:
+            return -1, goal
+        if t < minimum:
+            minimum = t
+        path_set.remove(child)
+        path.pop()
+
+    if record_steps:
+        steps.append(
+            SearchStep(
+                StepKind.EXPLORE,
+                node,
+                len(path_set),
+                len(path),
+                g,
+                "Hoàn tất mở rộng node trong contour hiện tại.",
+                depth_limit=threshold,
+                ids_round=round_no,
+            )
+        )
+    return minimum, None
+
+
+def _solve_idastar(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
+    """IDA_star.txt: lặp theo ngưỡng f, DFS theo contour với f(n)=g(n)+h(n)."""
+    if start == GOAL:
+        step = SearchStep(StepKind.GOAL, start, 1, 0, 0, "Trạng thái ban đầu đã là đích.")
+        return SearchResult(SearchAlgo.IDASTAR, [start], [step] if record_steps else [], 0)
+
+    threshold = manhattan(start)
+    round_no = 0
+    steps: list[SearchStep] = []
+    nodes_expanded = 0
+
+    while True:
+        round_no += 1
+        parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+        path = [start]
+        path_set = {start}
+        stats = {"expanded": 0}
+
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    StepKind.IDS_ROUND,
+                    start,
+                    1,
+                    1,
+                    0,
+                    f"IDA* vòng {round_no}: threshold={threshold}.",
+                    depth_limit=threshold,
+                    ids_round=round_no,
+                )
+            )
+
+        t, goal = _ida_star_dfs(
+            start,
+            0,
+            threshold,
+            path,
+            path_set,
+            parent,
+            steps,
+            record_steps=record_steps,
+            stats=stats,
+            round_no=round_no,
+        )
+        nodes_expanded += stats["expanded"]
+
+        if goal is not None:
+            path_to_goal = reconstruct(goal, parent)
+            return SearchResult(
+                SearchAlgo.IDASTAR,
+                path_to_goal,
+                steps,
+                nodes_expanded,
+                ids_rounds=round_no,
+                final_depth_limit=threshold,
+            )
+
+        if t >= 10**9:
+            if record_steps:
+                steps.append(
+                    SearchStep(
+                        StepKind.FAIL,
+                        start,
+                        0,
+                        0,
+                        0,
+                        "IDA* failure — không còn ngưỡng kế tiếp.",
+                        depth_limit=threshold,
+                        ids_round=round_no,
+                    )
+                )
+            return None
+
+        threshold = t
+
+
 def solve(start: tuple[int, ...], algo: SearchAlgo, *, record_steps: bool = True) -> SearchResult | None:
     if not is_solvable(start):
         return None
@@ -564,7 +835,11 @@ def solve(start: tuple[int, ...], algo: SearchAlgo, *, record_steps: bool = True
         return _solve_ids(start, record_steps=record_steps)
     if algo is SearchAlgo.UCS:
         return _solve_ucs(start, record_steps=record_steps)
-    return _solve_greedy(start, record_steps=record_steps)
+    if algo is SearchAlgo.GREEDY:
+        return _solve_greedy(start, record_steps=record_steps)
+    if algo is SearchAlgo.ASTAR:
+        return _solve_astar(start, record_steps=record_steps)
+    return _solve_idastar(start, record_steps=record_steps)
 
 
 def solve_bfs(start: tuple[int, ...], *, record_steps: bool = True) -> SearchResult | None:
