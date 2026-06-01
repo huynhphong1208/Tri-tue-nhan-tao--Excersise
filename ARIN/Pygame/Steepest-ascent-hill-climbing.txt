@@ -1,0 +1,21 @@
+function STEEPEST-ASCENT-HILL-CLIMBING(problem)
+    returns a state
+
+    current ← problem.INITIAL
+
+    while true do
+
+        best ← current
+
+        for each neighbor in EXPAND(problem, current) do
+
+            if VALUE(neighbor) > VALUE(best) then
+
+                best ← neighbor
+
+        if VALUE(best) ≤ VALUE(current) then
+
+            return current
+
+        current ← best
+

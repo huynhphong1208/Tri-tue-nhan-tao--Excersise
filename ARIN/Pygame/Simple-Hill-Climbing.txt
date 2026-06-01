@@ -1,0 +1,22 @@
+function SIMPLE-HILL-CLIMBING(problem)
+    returns a state
+
+    current ← problem.INITIAL
+
+    while true do
+
+        found_better ← false
+
+        for each neighbor in EXPAND(problem, current) do
+
+            if VALUE(neighbor) > VALUE(current) then
+
+                current ← neighbor
+
+                found_better ← true
+
+                break
+
+        if not found_better then
+
+            return current

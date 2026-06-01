@@ -1,5 +1,5 @@
 """
-8-Puzzle — Pygame UI trực quan hóa BFS / DFS / IDS / UCS / Greedy / A* / IDA*.
+8-Puzzle — Pygame UI trực quan hóa 9 thuật toán tìm kiếm (menu dropdown).
 Run: python puzzle8_game.py
 """
 
@@ -22,6 +22,7 @@ from puzzle_solver import (
     inversion_count,
     is_solvable,
     make_solvable,
+    manhattan,
     neighbors,
     parse_custom_state,
     slide_move,
@@ -30,6 +31,7 @@ from puzzle_solver import (
 
 SLIDE_DURATION = 0.75
 SNAP_STEP_DELAY = 0.04
+HILL_STEP_DELAY = 0.35
 LOG_HISTORY_MAX = 80
 LOG_VISIBLE_LINES = 7
 
@@ -40,7 +42,7 @@ SECTION_GAP = 10
 SECTION_PAD = 12
 BTN_ROW_H = 28
 BTN_GAP = 6
-CTRL_ROWS = 4
+CTRL_ROWS = 3
 CTRL_BOTTOM_PAD = 10
 
 LEFT_W = 420
@@ -87,7 +89,20 @@ COLORS = {
     "input_error": (255, 107, 107),
     "log_active": (255, 214, 102),
     "log_active_bg": (55, 48, 28),
+    "dropdown_list": (24, 30, 48),
 }
+
+ALGO_CHOICES: list[tuple[SearchAlgo, str]] = [
+    (SearchAlgo.BFS, "BFS"),
+    (SearchAlgo.DFS, "DFS"),
+    (SearchAlgo.IDS, "IDS"),
+    (SearchAlgo.UCS, "UCS"),
+    (SearchAlgo.GREEDY, "Greedy"),
+    (SearchAlgo.ASTAR, "A*"),
+    (SearchAlgo.IDASTAR, "IDA*"),
+    (SearchAlgo.SIMPLE_HILL, "Leo đồi đơn giản"),
+    (SearchAlgo.STEEPEST_HILL, "Leo đồi dốc nhất"),
+]
 
 
 @dataclass
@@ -128,6 +143,96 @@ class Button:
 
     def hit(self, pos: tuple[int, int]) -> bool:
         return self.enabled and self.rect.collidepoint(pos)
+
+
+class AlgoDropdown:
+    """Menu chọn thuật toán (dropdown)."""
+
+    def __init__(self, rect: pygame.Rect, choices: list[tuple[SearchAlgo, str]], *, index: int = 0):
+        self.rect = rect
+        self.choices = choices
+        self.index = index
+        self.open = False
+
+    @property
+    def algo(self) -> SearchAlgo:
+        return self.choices[self.index][0]
+
+    def set_algo(self, algo: SearchAlgo) -> None:
+        for i, (a, _) in enumerate(self.choices):
+            if a is algo:
+                self.index = i
+                return
+
+    def list_rect(self) -> pygame.Rect:
+        return pygame.Rect(
+            self.rect.x,
+            self.rect.bottom + 2,
+            self.rect.width,
+            len(self.choices) * BTN_ROW_H,
+        )
+
+    def item_rect(self, index: int) -> pygame.Rect:
+        base = self.list_rect()
+        return pygame.Rect(base.x, base.y + index * BTN_ROW_H, base.width, BTN_ROW_H)
+
+    def draw_header(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
+        hover = self.rect.collidepoint(pygame.mouse.get_pos())
+        bg = COLORS["btn_hover"] if hover else COLORS["btn"]
+        pygame.draw.rect(surf, bg, self.rect, border_radius=8)
+        pygame.draw.rect(surf, COLORS["section_border"], self.rect, 2, border_radius=8)
+        label = font.render(self.choices[self.index][1], True, COLORS["btn_text"])
+        surf.blit(label, (self.rect.x + 10, self.rect.centery - label.get_height() // 2))
+        arrow = font.render("▲" if self.open else "▼", True, COLORS["muted"])
+        surf.blit(arrow, arrow.get_rect(midright=(self.rect.right - 10, self.rect.centery)))
+
+    def draw_list_overlay(self, surf: pygame.Surface, font: pygame.font.Font) -> None:
+        if not self.open:
+            return
+        panel = self.list_rect()
+        shadow = panel.inflate(6, 6)
+        pygame.draw.rect(surf, (8, 10, 18), shadow, border_radius=10)
+        pygame.draw.rect(surf, COLORS["dropdown_list"], panel, border_radius=8)
+        pygame.draw.rect(surf, COLORS["input_border"], panel, 2, border_radius=8)
+        for i, (_, name) in enumerate(self.choices):
+            item = self.item_rect(i)
+            selected = i == self.index
+            item_hover = item.collidepoint(pygame.mouse.get_pos())
+            if selected:
+                item_bg = COLORS["btn_active"]
+                fg = (20, 25, 40)
+            elif item_hover:
+                item_bg = COLORS["btn_hover"]
+                fg = COLORS["btn_text"]
+            else:
+                item_bg = COLORS["dropdown_list"]
+                fg = COLORS["btn_text"]
+            pygame.draw.rect(surf, item_bg, item)
+            txt = font.render(name, True, fg)
+            surf.blit(txt, (item.x + 10, item.centery - txt.get_height() // 2))
+
+    def contains(self, pos: tuple[int, int]) -> bool:
+        if self.rect.collidepoint(pos):
+            return True
+        return self.open and self.list_rect().collidepoint(pos)
+
+    def handle_click(self, pos: tuple[int, int]) -> SearchAlgo | None:
+        if self.open:
+            if self.list_rect().collidepoint(pos):
+                for i in range(len(self.choices)):
+                    if self.item_rect(i).collidepoint(pos):
+                        self.index = i
+                        self.open = False
+                        return self.choices[i][0]
+                return None
+            if self.rect.collidepoint(pos):
+                self.open = False
+                return None
+            self.open = False
+            return None
+        if self.rect.collidepoint(pos):
+            self.open = True
+        return None
 
 
 class TextFlow:
@@ -276,7 +381,14 @@ def fit_window_size(content_top: int, info_h: int) -> tuple[int, int]:
 def format_search_log(step: SearchStep, algo: SearchAlgo) -> str:
     tag = algo.value
     d = step.depth
-    if algo in (SearchAlgo.UCS, SearchAlgo.GREEDY, SearchAlgo.ASTAR, SearchAlgo.IDASTAR) and step.message:
+    if algo in (
+        SearchAlgo.UCS,
+        SearchAlgo.GREEDY,
+        SearchAlgo.ASTAR,
+        SearchAlgo.IDASTAR,
+        SearchAlgo.SIMPLE_HILL,
+        SearchAlgo.STEEPEST_HILL,
+    ) and step.message:
         if step.kind in (
             StepKind.INIT,
             StepKind.REMOVE,
@@ -336,7 +448,7 @@ def draw_text_columns(
 class PuzzleApp:
     def __init__(self) -> None:
         pygame.init()
-        pygame.display.set_caption("8-Puzzle · BFS / DFS / IDS / UCS / Greedy / A* / IDA*")
+        pygame.display.set_caption("8-Puzzle · 9 thuật toán tìm kiếm")
 
         self.font_title = pygame.font.SysFont("segoeui", 26, bold=True)
         self.font_heading = pygame.font.SysFont("segoeui", 16, bold=True)
@@ -381,6 +493,7 @@ class PuzzleApp:
         self.pending_state: tuple[int, ...] | None = None
 
         self._build_buttons()
+        self.algo = self.algo_dropdown.algo
 
     def _ensure_solvable(self, state: tuple[int, ...]) -> tuple[tuple[int, ...], str]:
         fixed, changed = make_solvable(state)
@@ -402,6 +515,8 @@ class PuzzleApp:
             return
         self.max_reached = max(max(s.reached for s in self.search_steps), 1)
         self.max_frontier = max(max(s.frontier for s in self.search_steps), 1)
+        if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
+            self.max_reached = max(max(s.depth for s in self.search_steps) + 1, self.max_reached)
 
     def _reached_display_count(self) -> int:
         cur = self._current_step()
@@ -429,7 +544,11 @@ class PuzzleApp:
 
     def _depth_display(self) -> int:
         cur = self._current_step()
-        return cur.depth if cur else 0
+        if cur is not None:
+            return cur.depth
+        if self.search_steps and self.step_index < len(self.search_steps):
+            return self.search_steps[self.step_index].depth
+        return 0
 
     def _metric_pair(self, value: int, maximum: int) -> str:
         return f"{value}/{maximum}"
@@ -444,6 +563,8 @@ class PuzzleApp:
             SearchAlgo.GREEDY: "PQ theo h(n)",
             SearchAlgo.ASTAR: "PQ theo f(n)=g(n)+h(n)",
             SearchAlgo.IDASTAR: "Stack DFS + threshold f(n)",
+            SearchAlgo.SIMPLE_HILL: "Láng giềng đầu tiên h nhỏ hơn",
+            SearchAlgo.STEEPEST_HILL: "Láng giềng h nhỏ nhất",
         }[self.algo]
         lines = [
             f"Thuật toán: {self.algo.value}",
@@ -454,7 +575,14 @@ class PuzzleApp:
 
         searching = self.search_result and self.mode in (Mode.VISUALIZE, Mode.SOLUTION)
         if searching:
-            if self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
+            if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
+                cur = self._current_step()
+                if cur is None and self.search_steps and self.step_index < len(self.search_steps):
+                    cur = self.search_steps[self.step_index]
+                h_now = manhattan(cur.state) if cur else manhattan(self.state)
+                lines.append(f"Độ sâu leo: {self._depth_display()}")
+                lines.append(f"h(Manhattan): {h_now}")
+            elif self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
                 lim = self._depth_limit_display()
                 lines.append(f"|stack|: {self._metric_pair(self._frontier_display_count(), self.max_frontier)}")
                 lines.append(f"Độ sâu/limit: {self._metric_pair(self._depth_display(), lim)}")
@@ -498,25 +626,14 @@ class PuzzleApp:
         return True
 
     def _build_buttons(self) -> None:
-        """Lưới 4 hàng: thuật toán | heuristic | hành động | phát."""
+        """Lưới 3 hàng: dropdown thuật toán | hành động | phát."""
         rw = self.W - RIGHT_X - MARGIN
         x = RIGHT_X
         y = HEADER_H + 8
         g = BTN_GAP
         h = BTN_ROW_H
 
-        fourth = (rw - 3 * g) // 4
-        self.btn_bfs = Button(pygame.Rect(x, y, fourth, h), "BFS", toggle=True)
-        self.btn_dfs = Button(pygame.Rect(x + fourth + g, y, fourth, h), "DFS", toggle=True)
-        self.btn_ids = Button(pygame.Rect(x + 2 * (fourth + g), y, fourth, h), "IDS", toggle=True)
-        self.btn_ucs = Button(pygame.Rect(x + 3 * (fourth + g), y, fourth, h), "UCS", toggle=True)
-        self.btn_bfs.selected = True
-        y += h + g
-
-        third = (rw - 2 * g) // 3
-        self.btn_greedy = Button(pygame.Rect(x, y, third, h), "Greedy", toggle=True)
-        self.btn_astar = Button(pygame.Rect(x + third + g, y, third, h), "A*", toggle=True)
-        self.btn_idastar = Button(pygame.Rect(x + 2 * (third + g), y, third, h), "IDA*", toggle=True)
+        self.algo_dropdown = AlgoDropdown(pygame.Rect(x, y, rw, h), ALGO_CHOICES, index=0)
         y += h + g
 
         fourth = (rw - 3 * g) // 4
@@ -627,6 +744,9 @@ class PuzzleApp:
             self.slide_anim = None
             self.pending_state = None
 
+        self.algo_dropdown.open = False
+        self.algo = self.algo_dropdown.algo
+
         start, note = self._ensure_solvable(self.state)
         if start != self.state:
             self.state = start
@@ -656,7 +776,13 @@ class PuzzleApp:
         self.playing = True
         n_moves = len(path) - 1
         algo = self.algo.value
-        msg = f"{algo} — {result.nodes_expanded} nút mở rộng, lời giải {n_moves} bước."
+        if path[-1] != GOAL and self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
+            msg = (
+                f"{algo} — {result.nodes_expanded} bước leo, "
+                f"h cuối={manhattan(path[-1])} (cực tiểu cục bộ, chưa tới đích)."
+            )
+        else:
+            msg = f"{algo} — {result.nodes_expanded} nút mở rộng, lời giải {n_moves} bước."
         self.status_msg = (note + msg) if note else msg
 
     def _log_finished(self) -> bool:
@@ -678,7 +804,8 @@ class PuzzleApp:
             self.slide_anim = SlideAnim(val, fi, ti, 0.0)
             return True
         self.state = new_state
-        self.snap_timer = SNAP_STEP_DELAY
+        delay = HILL_STEP_DELAY if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL) else SNAP_STEP_DELAY
+        self.snap_timer = delay
         return False
 
     def advance_search_step(self) -> None:
@@ -691,6 +818,7 @@ class PuzzleApp:
         self.live_frontier = step.frontier
         self._show_board_state(step.state)
         self.step_index += 1
+        self._sync_bar_maxima()
         if self._log_finished():
             tag = self.algo.value
             self._append_log(f"[{tag}] Kết thúc tìm kiếm — bấm 'Lời giải' để xem đường đi.")
@@ -765,7 +893,7 @@ class PuzzleApp:
             self.screen, COLORS["section_border"], (MARGIN, HEADER_H), (self.W - MARGIN, HEADER_H), 1
         )
         self.screen.blit(
-            self.font_title.render("8-Puzzle · BFS / DFS / IDS / UCS / Greedy / A* / IDA*", True, COLORS["title"]),
+            self.font_title.render("8-Puzzle · 9 thuật toán", True, COLORS["title"]),
             (MARGIN, 14),
         )
         self.screen.blit(
@@ -906,14 +1034,8 @@ class PuzzleApp:
 
     def draw_right_panel(self) -> None:
         self.draw_controls_frame()
+        self.algo_dropdown.draw_header(self.screen, self.font_btn)
         for btn in (
-            self.btn_bfs,
-            self.btn_dfs,
-            self.btn_ids,
-            self.btn_ucs,
-            self.btn_greedy,
-            self.btn_astar,
-            self.btn_idastar,
             self.btn_shuffle,
             self.btn_reset,
             self.btn_solve,
@@ -959,12 +1081,41 @@ class PuzzleApp:
             SearchAlgo.GREEDY: "Reached & PQ (Greedy)",
             SearchAlgo.ASTAR: "Reached & PQ (A*)",
             SearchAlgo.IDASTAR: "Depth & Stack (IDA*)",
+            SearchAlgo.SIMPLE_HILL: "Bước leo & h (đơn giản)",
+            SearchAlgo.STEEPEST_HILL: "Bước leo & h (dốc nhất)",
         }[self.algo]
         inner_y = draw_section_box(self.screen, bar_rect, bar_title, self.font_heading)
         bx = bar_rect.x + pad
         by = inner_y
 
-        if self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
+        if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
+            by = draw_metric_bar(
+                self.screen,
+                bx,
+                by,
+                inner_w,
+                "Độ sâu leo",
+                self._depth_display(),
+                COLORS["bar_explored"],
+                max(self.max_reached, 1),
+                self.font_sm,
+            )
+            cur = self._current_step()
+            if cur is None and self.search_steps and self.step_index < len(self.search_steps):
+                cur = self.search_steps[self.step_index]
+            h_now = manhattan(cur.state) if cur else manhattan(self.state)
+            draw_metric_bar(
+                self.screen,
+                bx,
+                by,
+                inner_w,
+                "h (Manhattan) hiện tại",
+                h_now,
+                COLORS["bar_frontier"],
+                36,
+                self.font_sm,
+            )
+        elif self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
             by = draw_metric_bar(
                 self.screen,
                 bx,
@@ -1052,6 +1203,14 @@ class PuzzleApp:
                 "IDA*: threshold khởi tạo = f(start); DFS theo contour f<=threshold; "
                 "nếu không thấy đích thì tăng threshold = min f vượt ngưỡng."
             ),
+            SearchAlgo.SIMPLE_HILL: (
+                "Leo đồi đơn giản: duyệt EXPAND(current); chọn láng giềng đầu tiên "
+                "có h(Manhattan) nhỏ hơn; break; dừng nếu không cải thiện."
+            ),
+            SearchAlgo.STEEPEST_HILL: (
+                "Leo đồi dốc nhất: duyệt hết láng giềng, chọn h nhỏ nhất; "
+                "chuyển current nếu h giảm; dừng khi không cải thiện."
+            ),
         }
         flow.wrap(self.screen, self.font_sm, algo_blurbs[self.algo])
         y = algo_rect.bottom + SECTION_GAP
@@ -1087,6 +1246,10 @@ class PuzzleApp:
                     flow.line(self.screen, self.font_sm, line, col)
         self.screen.set_clip(clip)
 
+        if self.algo_dropdown.open:
+            self.algo_dropdown.draw_list_overlay(self.screen, self.font_btn)
+            self.algo_dropdown.draw_header(self.screen, self.font_btn)
+
     def _mode_label(self) -> str:
         if self.edit_mode:
             return "Nhập ma trận"
@@ -1104,32 +1267,18 @@ class PuzzleApp:
 
     def _select_algo(self, algo: SearchAlgo) -> None:
         self.algo = algo
-        self.btn_bfs.selected = algo is SearchAlgo.BFS
-        self.btn_dfs.selected = algo is SearchAlgo.DFS
-        self.btn_ids.selected = algo is SearchAlgo.IDS
-        self.btn_ucs.selected = algo is SearchAlgo.UCS
-        self.btn_greedy.selected = algo is SearchAlgo.GREEDY
-        self.btn_astar.selected = algo is SearchAlgo.ASTAR
-        self.btn_idastar.selected = algo is SearchAlgo.IDASTAR
+        self.algo_dropdown.set_algo(algo)
         self._reset_run()
         self.status_msg = f"Đã chọn {algo.value}."
 
     def handle_click(self, pos: tuple[int, int]) -> None:
-        if self.btn_bfs.hit(pos):
-            self._select_algo(SearchAlgo.BFS)
-        elif self.btn_dfs.hit(pos):
-            self._select_algo(SearchAlgo.DFS)
-        elif self.btn_ids.hit(pos):
-            self._select_algo(SearchAlgo.IDS)
-        elif self.btn_ucs.hit(pos):
-            self._select_algo(SearchAlgo.UCS)
-        elif self.btn_greedy.hit(pos):
-            self._select_algo(SearchAlgo.GREEDY)
-        elif self.btn_astar.hit(pos):
-            self._select_algo(SearchAlgo.ASTAR)
-        elif self.btn_idastar.hit(pos):
-            self._select_algo(SearchAlgo.IDASTAR)
-        elif self.btn_shuffle.hit(pos):
+        if self.algo_dropdown.contains(pos):
+            picked = self.algo_dropdown.handle_click(pos)
+            if picked is not None:
+                self._select_algo(picked)
+            return
+
+        if self.btn_shuffle.hit(pos):
             self.shuffle()
         elif self.btn_edit.hit(pos):
             self._open_edit_mode()
@@ -1213,7 +1362,12 @@ class PuzzleApp:
                     if self.edit_mode:
                         self._edit_handle_key(event)
                     elif event.key == pygame.K_ESCAPE:
-                        running = False
+                        if self.algo_dropdown.open:
+                            self.algo_dropdown.open = False
+                        elif self.edit_mode:
+                            self._close_edit_mode(apply=False)
+                        else:
+                            running = False
                     elif event.key == pygame.K_e:
                         self._open_edit_mode()
                     elif event.key == pygame.K_SPACE:

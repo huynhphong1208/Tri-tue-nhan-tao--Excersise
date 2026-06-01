@@ -1,4 +1,4 @@
-"""8-Puzzle search — BFS, DFS, IDS, UCS, Greedy, A*, IDA* theo mã giả tương ứng."""
+"""8-Puzzle search — BFS, DFS, IDS, UCS, Greedy, A*, IDA*, leo đồi theo mã giả."""
 
 from __future__ import annotations
 
@@ -20,6 +20,8 @@ class SearchAlgo(Enum):
     GREEDY = "Greedy"
     ASTAR = "A*"
     IDASTAR = "IDA*"
+    SIMPLE_HILL = "Leo đồi đơn giản"
+    STEEPEST_HILL = "Leo đồi dốc nhất"
 
 
 class StepKind(Enum):
@@ -824,6 +826,152 @@ def _solve_idastar(start: tuple[int, ...], *, record_steps: bool) -> SearchResul
         threshold = t
 
 
+def _hill_value(state: tuple[int, ...]) -> int:
+    """Chi phí = Manhattan; leo đồi tối ưu hóa bằng cách giảm h (VALUE tốt hơn khi h nhỏ hơn)."""
+    return manhattan(state)
+
+
+def _solve_simple_hill(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
+    """Simple-Hill-Climbing.txt: chọn láng giềng đầu tiên có h nhỏ hơn h(current)."""
+    if start == GOAL:
+        step = SearchStep(StepKind.GOAL, start, 1, 1, 0, "Trạng thái ban đầu đã là đích.")
+        return SearchResult(SearchAlgo.SIMPLE_HILL, [start], [step] if record_steps else [], 0)
+
+    current = start
+    parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+    depth: dict[tuple[int, ...], int] = {start: 0}
+    steps: list[SearchStep] = []
+    nodes_expanded = 0
+
+    def log(kind: StepKind, state: tuple[int, ...], msg: str) -> None:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    kind,
+                    state,
+                    len(depth),
+                    1,
+                    depth.get(state, depth.get(current, 0)),
+                    msg,
+                )
+            )
+
+    h0 = _hill_value(start)
+    log(StepKind.INIT, start, f"current ← INITIAL; h(n)={h0} (Manhattan).")
+
+    while True:
+        if current == GOAL:
+            path = reconstruct(current, parent)
+            log(StepKind.GOAL, current, f"Đạt đích sau {nodes_expanded} bước leo đồi.")
+            return SearchResult(SearchAlgo.SIMPLE_HILL, path, steps, nodes_expanded)
+
+        nodes_expanded += 1
+        h_cur = _hill_value(current)
+        child_list = neighbors(current)
+        scan = ", ".join(f"h={_hill_value(c)}" for c in child_list) or "(không có)"
+        log(
+            StepKind.EXPLORE,
+            current,
+            f"Duyệt EXPAND(current): [{scan}] — ưu tiên h nhỏ hơn {h_cur}.",
+        )
+
+        found_better = False
+        for child in child_list:
+            h_ch = _hill_value(child)
+            if h_ch < h_cur:
+                parent[child] = current
+                depth[child] = depth[current] + 1
+                log(
+                    StepKind.ADD,
+                    child,
+                    f"Láng giềng đầu tiên tốt hơn: h {h_cur}→{h_ch}; current ← neighbor; break.",
+                )
+                current = child
+                found_better = True
+                break
+
+        if not found_better:
+            path = reconstruct(current, parent)
+            log(
+                StepKind.FAIL,
+                current,
+                f"Không còn láng giềng tốt hơn — cực tiểu cục bộ h={h_cur}.",
+            )
+            return SearchResult(SearchAlgo.SIMPLE_HILL, path, steps, nodes_expanded)
+
+
+def _solve_steepest_hill(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
+    """Steepest-ascent-hill-climbing.txt: chọn láng giềng có h nhỏ nhất trong một vòng lặp."""
+    if start == GOAL:
+        step = SearchStep(StepKind.GOAL, start, 1, 1, 0, "Trạng thái ban đầu đã là đích.")
+        return SearchResult(SearchAlgo.STEEPEST_HILL, [start], [step] if record_steps else [], 0)
+
+    current = start
+    parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+    depth: dict[tuple[int, ...], int] = {start: 0}
+    steps: list[SearchStep] = []
+    nodes_expanded = 0
+
+    def log(kind: StepKind, state: tuple[int, ...], msg: str) -> None:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    kind,
+                    state,
+                    len(depth),
+                    1,
+                    depth.get(state, depth.get(current, 0)),
+                    msg,
+                )
+            )
+
+    h0 = _hill_value(start)
+    log(StepKind.INIT, start, f"current ← INITIAL; h(n)={h0} (Manhattan).")
+
+    while True:
+        if current == GOAL:
+            path = reconstruct(current, parent)
+            log(StepKind.GOAL, current, f"Đạt đích sau {nodes_expanded} bước leo đồi.")
+            return SearchResult(SearchAlgo.STEEPEST_HILL, path, steps, nodes_expanded)
+
+        nodes_expanded += 1
+        h_cur = _hill_value(current)
+        child_list = neighbors(current)
+        best = current
+        best_h = h_cur
+
+        for child in child_list:
+            h_ch = _hill_value(child)
+            if h_ch < best_h:
+                best = child
+                best_h = h_ch
+
+        scan = ", ".join(f"h={_hill_value(c)}" for c in child_list) or "(không có)"
+        log(
+            StepKind.EXPLORE,
+            current,
+            f"Duyệt EXPAND(current): [{scan}] — chọn h nhỏ nhất (best_h={best_h}).",
+        )
+
+        if best_h >= h_cur:
+            path = reconstruct(current, parent)
+            log(
+                StepKind.FAIL,
+                current,
+                f"Không cải thiện được — cực tiểu cục bộ h={h_cur}.",
+            )
+            return SearchResult(SearchAlgo.STEEPEST_HILL, path, steps, nodes_expanded)
+
+        parent[best] = current
+        depth[best] = depth[current] + 1
+        log(
+            StepKind.ADD,
+            best,
+            f"Láng giềng tốt nhất: h {h_cur}→{best_h}; current ← best.",
+        )
+        current = best
+
+
 def solve(start: tuple[int, ...], algo: SearchAlgo, *, record_steps: bool = True) -> SearchResult | None:
     if not is_solvable(start):
         return None
@@ -839,7 +987,11 @@ def solve(start: tuple[int, ...], algo: SearchAlgo, *, record_steps: bool = True
         return _solve_greedy(start, record_steps=record_steps)
     if algo is SearchAlgo.ASTAR:
         return _solve_astar(start, record_steps=record_steps)
-    return _solve_idastar(start, record_steps=record_steps)
+    if algo is SearchAlgo.IDASTAR:
+        return _solve_idastar(start, record_steps=record_steps)
+    if algo is SearchAlgo.SIMPLE_HILL:
+        return _solve_simple_hill(start, record_steps=record_steps)
+    return _solve_steepest_hill(start, record_steps=record_steps)
 
 
 def solve_bfs(start: tuple[int, ...], *, record_steps: bool = True) -> SearchResult | None:
