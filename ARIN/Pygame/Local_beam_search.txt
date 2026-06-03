@@ -1,0 +1,31 @@
+function LOCAL-BEAM-SEARCH(k)
+
+    Current_State_Set ← RANDOM_K_STATES(Start)
+
+    while true do
+
+        Neighbor_States ← ∅
+
+        // Generate neighbors
+        for each State in Current_State_Set do
+
+            for each Neighbor in EXPAND(State) do
+                add Neighbor to Neighbor_States
+
+        // No improvement possible
+        if Neighbor_States is empty then
+
+            sort Current_State_Set by VALUE descending
+
+            return BEST_STATE(Current_State_Set)
+
+        // Goal test
+        for each Neighbor in Neighbor_States do
+
+            if Neighbor = Goal then
+                return Neighbor
+
+        // Select next beam
+        sort Neighbor_States by VALUE descending
+
+        Current_State_Set ← FIRST_K_STATES(Neighbor_States)

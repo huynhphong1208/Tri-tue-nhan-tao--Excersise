@@ -1,0 +1,17 @@
+function STOCHASTIC-HILL-CLIMBING(problem)
+
+    current ← INITIAL-STATE(problem)
+
+    while true do
+
+        successors ← {}
+
+        for each neighbor in EXPAND(current) do
+
+            if VALUE(neighbor) > VALUE(current) then
+                add neighbor to successors
+
+        if successors is empty then
+            return current
+
+        current ← RANDOM-SELECT(successors)

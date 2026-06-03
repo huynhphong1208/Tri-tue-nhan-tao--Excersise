@@ -1,8 +1,9 @@
-"""8-Puzzle search — BFS, DFS, IDS, UCS, Greedy, A*, IDA*, leo đồi theo mã giả."""
+"""8-Puzzle search — BFS, DFS, IDS, UCS, Greedy, A*, IDA*, leo đồi, beam theo mã giả."""
 
 from __future__ import annotations
 
 import heapq
+import random
 from collections import deque
 from dataclasses import dataclass
 from enum import Enum
@@ -10,6 +11,9 @@ from enum import Enum
 GOAL: tuple[int, ...] = (1, 2, 3, 4, 5, 6, 7, 8, 0)
 DIRS = ((-1, 0), (1, 0), (0, -1), (0, 1))
 IDS_MAX_DEPTH = 80
+LOCAL_BEAM_K = 3
+LOCAL_BEAM_MAX_ITERATIONS = 400
+RANDOM_RESTART_MAX = 100
 
 
 class SearchAlgo(Enum):
@@ -22,6 +26,9 @@ class SearchAlgo(Enum):
     IDASTAR = "IDA*"
     SIMPLE_HILL = "Leo đồi đơn giản"
     STEEPEST_HILL = "Leo đồi dốc nhất"
+    STOCHASTIC_HILL = "Leo đồi ngẫu nhiên"
+    LOCAL_BEAM = "Local beam (k=3)"
+    RANDOM_RESTART = "Random restart leo đồi"
 
 
 class StepKind(Enum):
@@ -831,6 +838,12 @@ def _hill_value(state: tuple[int, ...]) -> int:
     return manhattan(state)
 
 
+def _better_neighbors(current: tuple[int, ...]) -> list[tuple[int, ...]]:
+    """Better_Neighbors: láng giềng có h(Manhattan) nhỏ hơn current."""
+    h_cur = _hill_value(current)
+    return [n for n in neighbors(current) if _hill_value(n) < h_cur]
+
+
 def _solve_simple_hill(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
     """Simple-Hill-Climbing.txt: chọn láng giềng đầu tiên có h nhỏ hơn h(current)."""
     if start == GOAL:
@@ -972,6 +985,309 @@ def _solve_steepest_hill(start: tuple[int, ...], *, record_steps: bool) -> Searc
         current = best
 
 
+def _solve_stochastic_hill(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
+    """Stochastic_Hill_Climbing.txt: RANDOM-SELECT trong successors có h nhỏ hơn."""
+    if start == GOAL:
+        step = SearchStep(StepKind.GOAL, start, 1, 1, 0, "Trạng thái ban đầu đã là đích.")
+        return SearchResult(SearchAlgo.STOCHASTIC_HILL, [start], [step] if record_steps else [], 0)
+
+    current = start
+    parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+    depth: dict[tuple[int, ...], int] = {start: 0}
+    steps: list[SearchStep] = []
+    nodes_expanded = 0
+    rng = random.Random()
+
+    def log(kind: StepKind, state: tuple[int, ...], msg: str) -> None:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    kind,
+                    state,
+                    len(depth),
+                    1,
+                    depth.get(state, depth.get(current, 0)),
+                    msg,
+                )
+            )
+
+    h0 = _hill_value(start)
+    log(StepKind.INIT, start, f"current ← INITIAL; h(n)={h0} (Manhattan).")
+
+    while True:
+        if current == GOAL:
+            path = reconstruct(current, parent)
+            log(StepKind.GOAL, current, f"Đạt đích sau {nodes_expanded} bước leo đồi.")
+            return SearchResult(SearchAlgo.STOCHASTIC_HILL, path, steps, nodes_expanded)
+
+        nodes_expanded += 1
+        h_cur = _hill_value(current)
+        successors = _better_neighbors(current)
+        scan = ", ".join(f"h={_hill_value(c)}" for c in successors) or "(không có)"
+        log(
+            StepKind.EXPLORE,
+            current,
+            f"successors (h < {h_cur}): [{scan}].",
+        )
+
+        if not successors:
+            path = reconstruct(current, parent)
+            log(StepKind.FAIL, current, f"successors rỗng — cực tiểu cục bộ h={h_cur}.")
+            return SearchResult(SearchAlgo.STOCHASTIC_HILL, path, steps, nodes_expanded)
+
+        nxt = rng.choice(successors)
+        parent[nxt] = current
+        depth[nxt] = depth[current] + 1
+        log(
+            StepKind.ADD,
+            nxt,
+            f"RANDOM-SELECT từ {len(successors)} successors: h {h_cur}→{_hill_value(nxt)}.",
+        )
+        current = nxt
+
+
+def _solve_local_beam(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
+    """Local_beam_search.txt: k=3; beam ban đầu = k láng giềng ngẫu nhiên của start."""
+    if start == GOAL:
+        step = SearchStep(StepKind.GOAL, start, 1, 1, 0, "Trạng thái ban đầu đã là đích.")
+        return SearchResult(SearchAlgo.LOCAL_BEAM, [start], [step] if record_steps else [], 0)
+
+    init_nbrs = neighbors(start)
+    if not init_nbrs:
+        return None
+
+    k = min(LOCAL_BEAM_K, len(init_nbrs))
+    rng = random.Random()
+    beam = rng.sample(init_nbrs, k) if len(init_nbrs) > k else list(init_nbrs)
+
+    parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+    depth: dict[tuple[int, ...], int] = {start: 0}
+    for s in beam:
+        parent[s] = start
+        depth[s] = 1
+
+    steps: list[SearchStep] = []
+    nodes_expanded = 0
+    iteration = 0
+
+    def log(kind: StepKind, state: tuple[int, ...], msg: str, *, frontier: int = 1) -> None:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    kind,
+                    state,
+                    len(depth),
+                    frontier,
+                    depth.get(state, 0),
+                    msg,
+                )
+            )
+
+    names = ", ".join(f"h={_hill_value(s)}" for s in beam)
+    log(
+        StepKind.INIT,
+        min(beam, key=_hill_value),
+        f"RANDOM_K_STATES: chọn {k} láng giềng start — [{names}].",
+        frontier=k,
+    )
+
+    prev_beam_key: tuple[tuple[int, ...], ...] | None = None
+
+    while iteration < LOCAL_BEAM_MAX_ITERATIONS:
+        iteration += 1
+        neighbor_states: list[tuple[int, ...]] = []
+
+        for state in beam:
+            nodes_expanded += 1
+            for nbr in neighbors(state):
+                neighbor_states.append(nbr)
+                if nbr not in parent:
+                    parent[nbr] = state
+                    depth[nbr] = depth[state] + 1
+
+        if not neighbor_states:
+            best = min(beam, key=_hill_value)
+            path = reconstruct(best, parent)
+            log(
+                StepKind.FAIL,
+                best,
+                f"Neighbor_States rỗng — trả BEST_STATE trong beam (h={_hill_value(best)}).",
+                frontier=0,
+            )
+            return SearchResult(SearchAlgo.LOCAL_BEAM, path, steps, nodes_expanded)
+
+        for nbr in neighbor_states:
+            if nbr == GOAL:
+                path = reconstruct(nbr, parent)
+                log(StepKind.GOAL, nbr, f"Tìm thấy Goal trong Neighbor_States (vòng {iteration}).", frontier=len(neighbor_states))
+                return SearchResult(SearchAlgo.LOCAL_BEAM, path, steps, nodes_expanded)
+
+        neighbor_states.sort(key=_hill_value)
+        seen: set[tuple[int, ...]] = set()
+        unique: list[tuple[int, ...]] = []
+        for nbr in neighbor_states:
+            if nbr not in seen:
+                seen.add(nbr)
+                unique.append(nbr)
+        if not unique:
+            best = min(beam, key=_hill_value)
+            path = reconstruct(best, parent)
+            log(StepKind.FAIL, best, f"Không có láng giềng mới — h={_hill_value(best)}.", frontier=0)
+            return SearchResult(SearchAlgo.LOCAL_BEAM, path, steps, nodes_expanded)
+
+        beam = unique[:k]
+        beam_key = tuple(sorted(beam))
+        if beam_key == prev_beam_key:
+            best = min(beam, key=_hill_value)
+            path = reconstruct(best, parent)
+            log(
+                StepKind.FAIL,
+                best,
+                f"Beam không đổi (vòng {iteration}) — dừng tại h={_hill_value(best)}.",
+                frontier=len(neighbor_states),
+            )
+            return SearchResult(SearchAlgo.LOCAL_BEAM, path, steps, nodes_expanded)
+        prev_beam_key = beam_key
+
+        rep = min(beam, key=_hill_value)
+        beam_desc = ", ".join(f"h={_hill_value(s)}" for s in beam)
+        log(
+            StepKind.EXPLORE,
+            rep,
+            f"Vòng {iteration}: FIRST_K={k} theo h tăng dần — beam [{beam_desc}].",
+            frontier=len(neighbor_states),
+        )
+
+    best = min(beam, key=_hill_value)
+    path = reconstruct(best, parent)
+    log(
+        StepKind.FAIL,
+        best,
+        f"Đạt giới hạn {LOCAL_BEAM_MAX_ITERATIONS} vòng — h={_hill_value(best)}.",
+        frontier=0,
+    )
+    return SearchResult(SearchAlgo.LOCAL_BEAM, path, steps, nodes_expanded)
+
+
+def _solve_random_restart_hill(start: tuple[int, ...], *, record_steps: bool) -> SearchResult | None:
+    """Random_restart_hill_climbing.txt: MAX_RESTART=100; RANDOM_CHOICE(Better_Neighbors)."""
+    if start == GOAL:
+        step = SearchStep(StepKind.GOAL, start, 1, 1, 0, "Trạng thái ban đầu đã là đích.")
+        return SearchResult(SearchAlgo.RANDOM_RESTART, [start], [step] if record_steps else [], 0)
+
+    steps: list[SearchStep] = []
+    nodes_expanded = 0
+    rng = random.Random()
+    best_state = start
+    best_h = _hill_value(start)
+    best_parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+
+    def log(
+        kind: StepKind,
+        state: tuple[int, ...],
+        msg: str,
+        *,
+        depth: int = 0,
+        frontier: int = 1,
+        restart: int | None = None,
+    ) -> None:
+        if record_steps:
+            steps.append(
+                SearchStep(
+                    kind,
+                    state,
+                    restart if restart is not None else 1,
+                    frontier,
+                    depth,
+                    msg,
+                    ids_round=restart,
+                )
+            )
+
+    for restart in range(1, RANDOM_RESTART_MAX + 1):
+        current = start
+        parent: dict[tuple[int, ...], tuple[int, ...] | None] = {start: None}
+        depth_map: dict[tuple[int, ...], int] = {start: 0}
+
+        log(
+            StepKind.IDS_ROUND,
+            start,
+            f"Restart {restart}/{RANDOM_RESTART_MAX}: Current_State ← Start.",
+            restart=restart,
+        )
+
+        while True:
+            if current == GOAL:
+                path = reconstruct(current, parent)
+                log(
+                    StepKind.GOAL,
+                    current,
+                    f"Goal tại restart {restart} sau {nodes_expanded} bước mở rộng.",
+                    depth=depth_map[current],
+                    restart=restart,
+                )
+                return SearchResult(
+                    SearchAlgo.RANDOM_RESTART,
+                    path,
+                    steps,
+                    nodes_expanded,
+                    ids_rounds=restart,
+                )
+
+            nodes_expanded += 1
+            h_cur = _hill_value(current)
+            better = _better_neighbors(current)
+            scan = ", ".join(f"h={_hill_value(c)}" for c in better) or "(không có)"
+            log(
+                StepKind.EXPLORE,
+                current,
+                f"Better_Neighbors: [{scan}] (h_current={h_cur}).",
+                depth=depth_map[current],
+                restart=restart,
+            )
+
+            if not better:
+                log(
+                    StepKind.CUTOFF,
+                    current,
+                    f"Cực tiểu cục bộ h={h_cur} — break, sang restart tiếp theo.",
+                    depth=depth_map[current],
+                    restart=restart,
+                )
+                if h_cur < best_h:
+                    best_h = h_cur
+                    best_state = current
+                    best_parent = dict(parent)
+                break
+
+            nxt = rng.choice(better)
+            parent[nxt] = current
+            depth_map[nxt] = depth_map[current] + 1
+            log(
+                StepKind.ADD,
+                nxt,
+                f"RANDOM_CHOICE trong {len(better)} Better_Neighbors: h {h_cur}→{_hill_value(nxt)}.",
+                depth=depth_map[nxt],
+                restart=restart,
+            )
+            current = nxt
+
+    path = reconstruct(best_state, best_parent)
+    log(
+        StepKind.FAIL,
+        best_state,
+        f"Failure sau {RANDOM_RESTART_MAX} restart — h tốt nhất={best_h}.",
+        restart=RANDOM_RESTART_MAX,
+    )
+    return SearchResult(
+        SearchAlgo.RANDOM_RESTART,
+        path,
+        steps,
+        nodes_expanded,
+        ids_rounds=RANDOM_RESTART_MAX,
+    )
+
+
 def solve(start: tuple[int, ...], algo: SearchAlgo, *, record_steps: bool = True) -> SearchResult | None:
     if not is_solvable(start):
         return None
@@ -991,7 +1307,15 @@ def solve(start: tuple[int, ...], algo: SearchAlgo, *, record_steps: bool = True
         return _solve_idastar(start, record_steps=record_steps)
     if algo is SearchAlgo.SIMPLE_HILL:
         return _solve_simple_hill(start, record_steps=record_steps)
-    return _solve_steepest_hill(start, record_steps=record_steps)
+    if algo is SearchAlgo.STEEPEST_HILL:
+        return _solve_steepest_hill(start, record_steps=record_steps)
+    if algo is SearchAlgo.STOCHASTIC_HILL:
+        return _solve_stochastic_hill(start, record_steps=record_steps)
+    if algo is SearchAlgo.LOCAL_BEAM:
+        return _solve_local_beam(start, record_steps=record_steps)
+    if algo is SearchAlgo.RANDOM_RESTART:
+        return _solve_random_restart_hill(start, record_steps=record_steps)
+    return None
 
 
 def solve_bfs(start: tuple[int, ...], *, record_steps: bool = True) -> SearchResult | None:

@@ -1,0 +1,30 @@
+function RANDOM-RESTART-HILL-CLIMBING(Start)
+
+    MAX_RESTART ← maximum number of restarts
+
+    for i ← 1 to MAX_RESTART do
+
+        Current_State ← Start
+
+        while true do
+
+            if Current_State = Goal then
+                return Current_State
+
+            Neighbor_States ← EXPAND(Current_State)
+
+            Better_Neighbors ← {
+                n ∈ Neighbor_States
+                | VALUE(n) > VALUE(Current_State)
+            }
+
+            if Better_Neighbors is empty then
+                break
+                // Local optimum reached,
+                // continue with next restart
+
+            Next_State ← RANDOM_CHOICE(Better_Neighbors)
+
+            Current_State ← Next_State
+
+    return failure

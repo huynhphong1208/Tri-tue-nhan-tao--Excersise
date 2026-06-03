@@ -1,5 +1,5 @@
 """
-8-Puzzle — Pygame UI trực quan hóa 9 thuật toán tìm kiếm (menu dropdown).
+8-Puzzle — Pygame UI trực quan hóa 12 thuật toán tìm kiếm (menu dropdown).
 Run: python puzzle8_game.py
 """
 
@@ -14,6 +14,7 @@ import pygame
 
 from puzzle_solver import (
     GOAL,
+    LOCAL_BEAM_K,
     SearchAlgo,
     SearchResult,
     SearchStep,
@@ -53,6 +54,7 @@ BOARD_Y = HEADER_H + 12
 RIGHT_X = MARGIN + LEFT_W + 16
 
 BAR_SECTION_H = 128
+BAR_SECTION_H_EXTRA = 168
 ALGO_SECTION_H = 72
 LOG_SECTION_H = 118
 INFO_MAX_LINES = 8
@@ -102,7 +104,20 @@ ALGO_CHOICES: list[tuple[SearchAlgo, str]] = [
     (SearchAlgo.IDASTAR, "IDA*"),
     (SearchAlgo.SIMPLE_HILL, "Leo đồi đơn giản"),
     (SearchAlgo.STEEPEST_HILL, "Leo đồi dốc nhất"),
+    (SearchAlgo.STOCHASTIC_HILL, "Leo đồi ngẫu nhiên"),
+    (SearchAlgo.LOCAL_BEAM, "Local beam (k=3)"),
+    (SearchAlgo.RANDOM_RESTART, "Random restart"),
 ]
+
+HILL_ALGOS = frozenset(
+    {
+        SearchAlgo.SIMPLE_HILL,
+        SearchAlgo.STEEPEST_HILL,
+        SearchAlgo.STOCHASTIC_HILL,
+        SearchAlgo.LOCAL_BEAM,
+        SearchAlgo.RANDOM_RESTART,
+    }
+)
 
 
 @dataclass
@@ -317,6 +332,16 @@ def draw_legend_row(
     return y + LEGEND_ROW_H
 
 
+def metric_bar_row_height(font: pygame.font.Font) -> int:
+    return font.get_height() + 6 + 12 + 10
+
+
+def calc_bar_section_height(font: pygame.font.Font, num_bars: int) -> int:
+    if num_bars <= 0:
+        return BAR_SECTION_H
+    return section_title_height(font) + num_bars * metric_bar_row_height(font) + SECTION_PAD + 4
+
+
 def draw_metric_bar(
     surf: pygame.Surface,
     x: int,
@@ -363,7 +388,7 @@ def fit_window_size(content_top: int, info_h: int) -> tuple[int, int]:
         content_top
         + info_h
         + SECTION_GAP
-        + BAR_SECTION_H
+        + calc_bar_section_height(pygame.font.SysFont("segoeui", 13), 3)
         + SECTION_GAP
         + ALGO_SECTION_H
         + SECTION_GAP
@@ -386,8 +411,7 @@ def format_search_log(step: SearchStep, algo: SearchAlgo) -> str:
         SearchAlgo.GREEDY,
         SearchAlgo.ASTAR,
         SearchAlgo.IDASTAR,
-        SearchAlgo.SIMPLE_HILL,
-        SearchAlgo.STEEPEST_HILL,
+        *HILL_ALGOS,
     ) and step.message:
         if step.kind in (
             StepKind.INIT,
@@ -420,6 +444,16 @@ def format_search_log(step: SearchStep, algo: SearchAlgo) -> str:
     return f"[{tag}] {step.message}"
 
 
+def _fit_line(font: pygame.font.Font, text: str, max_width: int) -> str:
+    if font.size(text)[0] <= max_width:
+        return text
+    ell = "…"
+    trimmed = text
+    while trimmed and font.size(trimmed + ell)[0] > max_width:
+        trimmed = trimmed[:-1]
+    return (trimmed + ell) if trimmed else ell
+
+
 def draw_text_columns(
     surf: pygame.Surface,
     x: int,
@@ -429,6 +463,7 @@ def draw_text_columns(
     font: pygame.font.Font,
     *,
     line_gap: int = 3,
+    col_gap: int = 10,
 ) -> int:
     """Vẽ danh sách dòng chia 2 cột; trả về y cuối."""
     if not lines:
@@ -436,19 +471,22 @@ def draw_text_columns(
     half = (len(lines) + 1) // 2
     left, right = lines[:half], lines[half:]
     line_h = font.get_height() + line_gap
+    col2_x = x + col_w + col_gap
     rows = max(len(left), len(right))
     for i in range(rows):
         if i < len(left):
-            surf.blit(font.render(left[i], True, COLORS["text"]), (x, y + i * line_h))
+            txt = _fit_line(font, left[i], col_w)
+            surf.blit(font.render(txt, True, COLORS["text"]), (x, y + i * line_h))
         if i < len(right):
-            surf.blit(font.render(right[i], True, COLORS["text"]), (x + col_w, y + i * line_h))
+            txt = _fit_line(font, right[i], col_w)
+            surf.blit(font.render(txt, True, COLORS["text"]), (col2_x, y + i * line_h))
     return y + rows * line_h
 
 
 class PuzzleApp:
     def __init__(self) -> None:
         pygame.init()
-        pygame.display.set_caption("8-Puzzle · 9 thuật toán tìm kiếm")
+        pygame.display.set_caption("8-Puzzle · 12 thuật toán tìm kiếm")
 
         self.font_title = pygame.font.SysFont("segoeui", 26, bold=True)
         self.font_heading = pygame.font.SysFont("segoeui", 16, bold=True)
@@ -515,7 +553,7 @@ class PuzzleApp:
             return
         self.max_reached = max(max(s.reached for s in self.search_steps), 1)
         self.max_frontier = max(max(s.frontier for s in self.search_steps), 1)
-        if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
+        if self.algo in HILL_ALGOS:
             self.max_reached = max(max(s.depth for s in self.search_steps) + 1, self.max_reached)
 
     def _reached_display_count(self) -> int:
@@ -565,22 +603,38 @@ class PuzzleApp:
             SearchAlgo.IDASTAR: "Stack DFS + threshold f(n)",
             SearchAlgo.SIMPLE_HILL: "Láng giềng đầu tiên h nhỏ hơn",
             SearchAlgo.STEEPEST_HILL: "Láng giềng h nhỏ nhất",
+            SearchAlgo.STOCHASTIC_HILL: "RANDOM-SELECT trong Better_Neighbors",
+            SearchAlgo.LOCAL_BEAM: f"Beam k={LOCAL_BEAM_K} láng giềng ngẫu nhiên",
+            SearchAlgo.RANDOM_RESTART: "Restart + RANDOM_CHOICE (max 100)",
         }[self.algo]
+        mode = self._mode_label()
+        if len(mode) > 28:
+            mode = mode[:25] + "…"
         lines = [
             f"Thuật toán: {self.algo.value}",
-            f"Chế độ: {self._mode_label()}",
+            f"Chế độ: {mode}",
             f"Ma trận: {'Hợp lệ' if valid else 'Không hợp lệ'}",
             f"Cấu trúc: {struct}",
         ]
 
         searching = self.search_result and self.mode in (Mode.VISUALIZE, Mode.SOLUTION)
         if searching:
-            if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
+            if self.algo is SearchAlgo.RANDOM_RESTART:
+                cur = self._current_step()
+                rnd = cur.ids_round if cur and cur.ids_round is not None else (
+                    self.search_result.ids_rounds if self.search_result else 0
+                )
+                lines.append(f"Restart: {rnd}")
+                if cur:
+                    lines.append(f"h(Manhattan): {manhattan(cur.state)}")
+            elif self.algo in HILL_ALGOS:
                 cur = self._current_step()
                 if cur is None and self.search_steps and self.step_index < len(self.search_steps):
                     cur = self.search_steps[self.step_index]
                 h_now = manhattan(cur.state) if cur else manhattan(self.state)
                 lines.append(f"Độ sâu leo: {self._depth_display()}")
+                if self.algo is SearchAlgo.LOCAL_BEAM and cur:
+                    lines.append(f"|beam|/frontier: {cur.reached}/{cur.frontier}")
                 lines.append(f"h(Manhattan): {h_now}")
             elif self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
                 lim = self._depth_limit_display()
@@ -776,7 +830,7 @@ class PuzzleApp:
         self.playing = True
         n_moves = len(path) - 1
         algo = self.algo.value
-        if path[-1] != GOAL and self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
+        if path[-1] != GOAL and self.algo in HILL_ALGOS:
             msg = (
                 f"{algo} — {result.nodes_expanded} bước leo, "
                 f"h cuối={manhattan(path[-1])} (cực tiểu cục bộ, chưa tới đích)."
@@ -804,7 +858,7 @@ class PuzzleApp:
             self.slide_anim = SlideAnim(val, fi, ti, 0.0)
             return True
         self.state = new_state
-        delay = HILL_STEP_DELAY if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL) else SNAP_STEP_DELAY
+        delay = HILL_STEP_DELAY if self.algo in HILL_ALGOS else SNAP_STEP_DELAY
         self.snap_timer = delay
         return False
 
@@ -893,7 +947,7 @@ class PuzzleApp:
             self.screen, COLORS["section_border"], (MARGIN, HEADER_H), (self.W - MARGIN, HEADER_H), 1
         )
         self.screen.blit(
-            self.font_title.render("8-Puzzle · 9 thuật toán", True, COLORS["title"]),
+            self.font_title.render("8-Puzzle · 12 thuật toán", True, COLORS["title"]),
             (MARGIN, 14),
         )
         self.screen.blit(
@@ -1064,15 +1118,25 @@ class PuzzleApp:
             self.screen,
             info_rect.x + pad,
             inner_y,
-            col_w + col_gap,
+            col_w,
             info_lines,
             self.font_sm,
             line_gap=4,
+            col_gap=col_gap,
         )
         self.screen.set_clip(clip)
         y = info_rect.bottom + SECTION_GAP
 
-        bar_rect = pygame.Rect(RIGHT_X, y, rw, BAR_SECTION_H)
+        if self.algo in (SearchAlgo.RANDOM_RESTART, SearchAlgo.LOCAL_BEAM):
+            bar_count = 3
+        elif self.algo in HILL_ALGOS:
+            bar_count = 2
+        elif self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
+            bar_count = 2
+        else:
+            bar_count = 2
+        bar_h = calc_bar_section_height(self.font_sm, bar_count)
+        bar_rect = pygame.Rect(RIGHT_X, y, rw, bar_h)
         bar_title = {
             SearchAlgo.BFS: "Reached & Frontier (BFS)",
             SearchAlgo.DFS: "Reached & Stack (DFS)",
@@ -1083,38 +1147,119 @@ class PuzzleApp:
             SearchAlgo.IDASTAR: "Depth & Stack (IDA*)",
             SearchAlgo.SIMPLE_HILL: "Bước leo & h (đơn giản)",
             SearchAlgo.STEEPEST_HILL: "Bước leo & h (dốc nhất)",
+            SearchAlgo.STOCHASTIC_HILL: "Bước leo & h (ngẫu nhiên)",
+            SearchAlgo.LOCAL_BEAM: "Beam k=3 & h",
+            SearchAlgo.RANDOM_RESTART: "Restart & h",
         }[self.algo]
         inner_y = draw_section_box(self.screen, bar_rect, bar_title, self.font_heading)
         bx = bar_rect.x + pad
         by = inner_y
 
-        if self.algo in (SearchAlgo.SIMPLE_HILL, SearchAlgo.STEEPEST_HILL):
-            by = draw_metric_bar(
-                self.screen,
-                bx,
-                by,
-                inner_w,
-                "Độ sâu leo",
-                self._depth_display(),
-                COLORS["bar_explored"],
-                max(self.max_reached, 1),
-                self.font_sm,
-            )
+        if self.algo in HILL_ALGOS:
             cur = self._current_step()
             if cur is None and self.search_steps and self.step_index < len(self.search_steps):
                 cur = self.search_steps[self.step_index]
             h_now = manhattan(cur.state) if cur else manhattan(self.state)
-            draw_metric_bar(
-                self.screen,
-                bx,
-                by,
-                inner_w,
-                "h (Manhattan) hiện tại",
-                h_now,
-                COLORS["bar_frontier"],
-                36,
-                self.font_sm,
-            )
+            clip = self.screen.get_clip()
+            self.screen.set_clip(bar_rect.inflate(-2, -2))
+
+            if self.algo is SearchAlgo.RANDOM_RESTART:
+                rnd = cur.ids_round if cur and cur.ids_round else (
+                    self.search_result.ids_rounds if self.search_result else 1
+                )
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "Số lần restart",
+                    rnd,
+                    COLORS["bar_explored"],
+                    100,
+                    self.font_sm,
+                )
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "h (Manhattan)",
+                    h_now,
+                    COLORS["bar_frontier"],
+                    36,
+                    self.font_sm,
+                )
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "Độ sâu (restart)",
+                    self._depth_display(),
+                    COLORS["bar_explored"],
+                    max(self.max_reached, 1),
+                    self.font_sm,
+                )
+            elif self.algo is SearchAlgo.LOCAL_BEAM:
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "Vòng beam",
+                    self._depth_display(),
+                    COLORS["bar_explored"],
+                    max(self.max_reached, 1),
+                    self.font_sm,
+                )
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "h (Manhattan)",
+                    h_now,
+                    COLORS["bar_frontier"],
+                    36,
+                    self.font_sm,
+                )
+                beam_n = min(cur.reached, LOCAL_BEAM_K) if cur else LOCAL_BEAM_K
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "|beam|",
+                    beam_n,
+                    COLORS["bar_explored"],
+                    LOCAL_BEAM_K,
+                    self.font_sm,
+                )
+            else:
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "Độ sâu leo",
+                    self._depth_display(),
+                    COLORS["bar_explored"],
+                    max(self.max_reached, 1),
+                    self.font_sm,
+                )
+                by = draw_metric_bar(
+                    self.screen,
+                    bx,
+                    by,
+                    inner_w,
+                    "h (Manhattan)",
+                    h_now,
+                    COLORS["bar_frontier"],
+                    36,
+                    self.font_sm,
+                )
+
+            self.screen.set_clip(clip)
         elif self.algo in (SearchAlgo.IDS, SearchAlgo.IDASTAR):
             by = draw_metric_bar(
                 self.screen,
@@ -1210,6 +1355,18 @@ class PuzzleApp:
             SearchAlgo.STEEPEST_HILL: (
                 "Leo đồi dốc nhất: duyệt hết láng giềng, chọn h nhỏ nhất; "
                 "chuyển current nếu h giảm; dừng khi không cải thiện."
+            ),
+            SearchAlgo.STOCHASTIC_HILL: (
+                "Stochastic: successors = Better_Neighbors (h nhỏ hơn); "
+                "current ← RANDOM-SELECT(successors); dừng nếu rỗng."
+            ),
+            SearchAlgo.LOCAL_BEAM: (
+                "Local beam k=3: beam ban đầu = 3 láng giềng ngẫu nhiên của start; "
+                "mỗi vòng FIRST_K theo h(Manhattan) tốt nhất."
+            ),
+            SearchAlgo.RANDOM_RESTART: (
+                "Random restart: tối đa 100 lần từ Start; mỗi lần leo với "
+                "RANDOM_CHOICE(Better_Neighbors); break tại cực tiểu cục bộ."
             ),
         }
         flow.wrap(self.screen, self.font_sm, algo_blurbs[self.algo])
